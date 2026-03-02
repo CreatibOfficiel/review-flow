@@ -307,7 +307,7 @@ export async function invokeClaudeReview(
 
     const childEnv = { ...process.env };
     // Remove CLAUDECODE to allow spawning Claude from within a Claude session
-    delete childEnv.CLAUDECODE;
+    childEnv.CLAUDECODE = undefined;
     const child = spawn(resolveClaudePath(), args, {
       cwd: job.localPath,
       env: {

@@ -2,7 +2,7 @@ import { execSync } from 'node:child_process'
 import type { ReviewAction } from '../entities/reviewAction/reviewAction.js'
 import { GitLabReviewActionCliGateway } from '../interface-adapters/gateways/cli/reviewAction.gitlab.cli.gateway.js'
 import { GitHubReviewActionCliGateway } from '../interface-adapters/gateways/cli/reviewAction.github.cli.gateway.js'
-import type { ExecutionResult, CommandExecutor } from '../entities/reviewAction/reviewAction.gateway.js'
+import type { ExecutionResult, CommandExecutor, ExecutionContext as GatewayExecutionContext } from '../entities/reviewAction/reviewAction.gateway.js'
 
 const COMMAND_TIMEOUT_MS = 30000
 
@@ -37,12 +37,12 @@ export async function executeThreadActions(
   _logger: Logger,
   executor: CommandExecutor
 ): Promise<ExecutionResult> {
-  const gatewayContext = {
+  const gatewayContext: GatewayExecutionContext = {
     projectPath: context.projectPath,
     mrNumber: context.mrNumber,
     localPath: context.localPath,
     diffMetadata: context.diffMetadata,
-    baseUrl: null as string | null,
+    baseUrl: null,
   }
 
   const gateway =
