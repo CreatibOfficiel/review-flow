@@ -570,6 +570,173 @@ export async function handleGitLabWebhook(
             mrNumber: updateResult.mergeRequestNumber,
           });
           return;
+        } else if (mr && ['pending-review', 'pending-approval'].includes(mr.state)) {
+          // MR is tracked and in an active state but doesn't need a followup
+          // (e.g. clean review with no warnings). Trigger a fresh review on new commits.
+          logger.info(
+            { mrNumber: updateResult.mergeRequestNumber, mrState: mr.state, project: updateResult.projectPath },
+            'Triggering fresh review after push on tracked MR'
+          );
+
+          const projectConfig = loadProjectConfig(updateRepoConfig.localPath);
+          const skill = projectConfig?.reviewSkill || updateRepoConfig.skill;
+
+          const reviewJobId = createJobId('gitlab', updateResult.projectPath, updateResult.mergeRequestNumber);
+          const reviewJob: ReviewJob = {
+            id: reviewJobId,
+            platform: 'gitlab',
+            projectPath: updateResult.projectPath,
+            localPath: updateRepoConfig.localPath,
+            mrNumber: updateResult.mergeRequestNumber,
+            skill,
+            mrUrl: updateResult.mergeRequestUrl,
+            sourceBranch: updateResult.sourceBranch,
+            targetBranch: updateResult.targetBranch,
+            jobType: 'review',
+            language: getProjectLanguage(updateRepoConfig.localPath),
+          };
+
+          enqueueReview(reviewJob, async (j, signal) => {
+            sendNotification('Review démarrée (push)', `MR !${j.mrNumber} - ${j.projectPath}`, logger);
+
+            const mergeRequestId = `gitlab-${j.projectPath}-${j.mrNumber}`;
+            const contextGateway = deps.reviewContextGateway;
+            const threadFetchGw = deps.threadFetchGateway;
+            const diffMetadataFetchGw = deps.diffMetadataFetchGateway;
+
+            try {
+              const threads = threadFetchGw.fetchThreads(j.projectPath, j.mrNumber);
+              let diffMetadata: import('../../../entities/reviewContext/reviewContext.js').DiffMetadata | undefined;
+              try {
+                diffMetadata = diffMetadataFetchGw.fetchDiffMetadata(j.projectPath, j.mrNumber);
+              } catch (error) {
+                logger.warn(
+                  { mrNumber: j.mrNumber, error: error instanceof Error ? error.message : String(error) },
+                  'Failed to fetch diff metadata for push review, inline comments will be skipped'
+                );
+              }
+              const reviewAgentsList = getProjectAgents(j.localPath) ?? DEFAULT_AGENTS;
+              contextGateway.create({
+                localPath: j.localPath,
+                mergeRequestId,
+                platform: 'gitlab',
+                projectPath: j.projectPath,
+                mergeRequestNumber: j.mrNumber,
+                threads,
+                agents: reviewAgentsList,
+                diffMetadata,
+              });
+              logger.info(
+                { mrNumber: j.mrNumber, threadsCount: threads.length, hasDiffMetadata: !!diffMetadata },
+                'Review context file created with threads for push review'
+              );
+
+              startWatchingReviewContext(j.id, j.localPath, mergeRequestId);
+            } catch (error) {
+              logger.warn(
+                { mrNumber: j.mrNumber, error: error instanceof Error ? error.message : String(error) },
+                'Failed to create review context file for push review, continuing without it'
+              );
+            }
+
+            const result = await invokeClaudeReview(j, logger, (progress, progressEvent) => {
+              updateJobProgress(j.id, progress, progressEvent);
+
+              const runningAgent = progress.agents.find(a => a.status === 'running');
+              const completedAgents = progress.agents
+                .filter(a => a.status === 'completed')
+                .map(a => a.name);
+
+              contextGateway.updateProgress(j.localPath, mergeRequestId, {
+                phase: progress.currentPhase,
+                currentStep: runningAgent?.name ?? null,
+                stepsCompleted: completedAgents,
+              });
+            }, signal);
+
+            stopWatchingReviewContext(mergeRequestId);
+
+            if (result.success) {
+              const parsed = parseReviewOutput(result.stdout);
+
+              const reviewContext = contextGateway.read(j.localPath, mergeRequestId);
+              if (reviewContext && reviewContext.actions.length > 0) {
+                const contextActionResult = await executeActionsFromContext(
+                  reviewContext,
+                  j.localPath,
+                  logger,
+                  defaultCommandExecutor
+                );
+                logger.info(
+                  { ...contextActionResult, mrNumber: j.mrNumber },
+                  'Actions executed from context file for push review'
+                );
+              } else {
+                const threadActions = parseThreadActions(result.stdout);
+                if (threadActions.length > 0) {
+                  const actionResult = await executeThreadActions(
+                    threadActions,
+                    {
+                      platform: 'gitlab',
+                      projectPath: j.projectPath,
+                      mrNumber: j.mrNumber,
+                      localPath: j.localPath,
+                    },
+                    logger,
+                    defaultCommandExecutor
+                  );
+                  logger.info(
+                    { ...actionResult, mrNumber: j.mrNumber },
+                    'Thread actions executed from stdout markers for push review (fallback)'
+                  );
+                }
+              }
+
+              const mrId = `gitlab-${j.projectPath}-${j.mrNumber}`;
+              const updatedMr = syncThreads.execute({ projectPath: j.localPath, mrId });
+
+              recordCompletion.execute({
+                projectPath: j.localPath,
+                mrId,
+                reviewData: {
+                  type: 'review',
+                  durationMs: result.durationMs,
+                  score: parsed.score,
+                  blocking: parsed.blocking,
+                  warnings: parsed.warnings,
+                  suggestions: parsed.suggestions,
+                  threadsOpened: parsed.blocking + parsed.warnings,
+                  threadsClosed: 0,
+                },
+              });
+              logger.info(
+                {
+                  mrNumber: j.mrNumber,
+                  score: parsed.score,
+                  blocking: parsed.blocking,
+                  warnings: parsed.warnings,
+                  durationMs: result.durationMs,
+                  openThreads: updatedMr?.openThreads,
+                  state: updatedMr?.state,
+                },
+                'Push review stats recorded and threads synced'
+              );
+
+              maybeEnqueueFixJob(j, logger, trackingGateway, deps);
+
+              sendNotification('Review terminée (push)', `MR !${j.mrNumber} - ${j.projectPath}`, logger);
+            } else if (!result.cancelled) {
+              sendNotification('Review échouée (push)', `MR !${j.mrNumber} - Code ${result.exitCode}`, logger);
+              throw new Error(`Push review failed with exit code ${result.exitCode}`);
+            }
+          });
+
+          reply.status(202).send({
+            status: 'review-queued',
+            jobId: reviewJobId,
+            mrNumber: updateResult.mergeRequestNumber,
+          });
+          return;
         }
       }
     }

@@ -80,7 +80,30 @@ if [ -z "$NGROK_URL" ]; then
 fi
 
 # ──────────────────────────────────────────────
-# 4. Compare with cached URL, update webhooks if changed
+# 4. Validate glab token (prompt for new one if invalid)
+# ──────────────────────────────────────────────
+validate_glab_token() {
+  glab api "projects/134" --hostname gitlab.ascan.io > /dev/null 2>&1
+}
+
+if ! validate_glab_token; then
+  echo -e "${YELLOW}GitLab token is invalid or expired.${NC}"
+  echo -n "Enter a GitLab personal access token (scope: api): "
+  read -r NEW_TOKEN
+  if [ -z "$NEW_TOKEN" ]; then
+    echo "ERROR: no token provided" >&2
+    exit 1
+  fi
+  glab config set token "$NEW_TOKEN" --host gitlab.ascan.io
+  if ! validate_glab_token; then
+    echo "ERROR: token is still invalid" >&2
+    exit 1
+  fi
+  echo -e "${GREEN}Token updated${NC}"
+fi
+
+# ──────────────────────────────────────────────
+# 5. Compare with cached URL, update webhooks if changed
 # ──────────────────────────────────────────────
 mkdir -p "$(dirname "$CACHE_FILE")"
 CACHED_URL=""
@@ -101,27 +124,36 @@ else
   WEBHOOK_URL="${NGROK_URL}/webhooks/gitlab"
   echo -e "${YELLOW}URL changed: updating ${#WEBHOOKS[@]} webhooks → ${WEBHOOK_URL}${NC}"
 
+  FAILED=0
   for entry in "${WEBHOOKS[@]}"; do
     IFS=: read -r pid hid label <<< "$entry"
     echo -n "  $label ... "
-    glab api -X PUT "projects/$pid/hooks/$hid" \
+    if glab api -X PUT "projects/$pid/hooks/$hid" \
       --hostname gitlab.ascan.io \
       -f "url=$WEBHOOK_URL" \
       -f merge_requests_events=true \
       -f push_events=false \
       -f "token=$TOKEN" \
       -f enable_ssl_verification=true \
-      > /dev/null
-    echo -e "${GREEN}ok${NC}"
+      > /dev/null 2>&1; then
+      echo -e "${GREEN}ok${NC}"
+    else
+      echo -e "${YELLOW}failed (no permission?)${NC}"
+      FAILED=$((FAILED + 1))
+    fi
   done
 
   # Save new URL to cache
   echo "$NGROK_URL" > "$CACHE_FILE"
-  echo -e "${GREEN}All webhooks updated${NC}"
+  if [ "$FAILED" -eq 0 ]; then
+    echo -e "${GREEN}All webhooks updated${NC}"
+  else
+    echo -e "${YELLOW}${FAILED}/${#WEBHOOKS[@]} webhooks failed (check token permissions)${NC}"
+  fi
 fi
 
 # ──────────────────────────────────────────────
-# 5. Summary
+# 6. Summary
 # ──────────────────────────────────────────────
 echo ""
 echo -e "${CYAN}ngrok:${NC}     $NGROK_URL"
