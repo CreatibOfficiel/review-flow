@@ -14,8 +14,8 @@ export interface ReviewJob {
   mrUrl: string;
   sourceBranch: string;
   targetBranch: string;
-  // Job type: review or followup
-  jobType?: 'review' | 'followup';
+  // Job type: review, followup, or fix
+  jobType?: 'review' | 'followup' | 'fix';
   // Output language for the review
   language?: Language;
   // Optional MR metadata
@@ -310,7 +310,7 @@ export function getJobsStatus(): {
     title?: string;
     description?: string;
     assignedBy?: { username: string; displayName?: string };
-    jobType?: 'review' | 'followup';
+    jobType?: 'review' | 'followup' | 'fix';
   }>;
   recent: Array<{
     id: string;
@@ -324,7 +324,7 @@ export function getJobsStatus(): {
     progress?: ReviewProgress;
     title?: string;
     assignedBy?: { username: string; displayName?: string };
-    jobType?: 'review' | 'followup';
+    jobType?: 'review' | 'followup' | 'fix';
   }>;
 } {
   return {

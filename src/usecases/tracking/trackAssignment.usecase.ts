@@ -89,6 +89,8 @@ export class TrackAssignmentUseCase implements UseCase<TrackAssignmentInput, Tra
       reviews: [],
       totalReviews: 0,
       totalFollowups: 0,
+      totalFixes: 0,
+      fixIterations: 0,
       totalBlocking: 0,
       totalWarnings: 0,
       totalSuggestions: 0,

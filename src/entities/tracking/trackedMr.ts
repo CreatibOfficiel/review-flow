@@ -27,6 +27,8 @@ export interface TrackedMr {
 
   totalReviews: number;
   totalFollowups: number;
+  totalFixes: number;
+  fixIterations: number;
   totalBlocking: number;
   totalWarnings: number;
   totalSuggestions: number;

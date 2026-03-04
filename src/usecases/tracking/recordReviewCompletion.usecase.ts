@@ -7,7 +7,7 @@ interface RecordReviewCompletionInput {
   projectPath: string;
   mrId: string;
   reviewData: {
-    type: 'review' | 'followup';
+    type: 'review' | 'followup' | 'fix';
     durationMs: number;
     score: number | null;
     blocking: number;
@@ -58,12 +58,19 @@ export class RecordReviewCompletionUseCase implements UseCase<RecordReviewComple
 
     const hasBlockingIssues = reviewData.blocking > 0 || openThreads > 0;
 
-    this.trackingGateway.update(projectPath, mrId, {
+    const updates: Partial<TrackedMr> = {
       openThreads,
       totalThreads,
       latestScore,
       state: hasBlockingIssues ? 'pending-fix' : 'pending-approval',
-    });
+    };
+
+    // Reset fix iteration counter when a fresh review starts
+    if (reviewData.type === 'review') {
+      updates.fixIterations = 0;
+    }
+
+    this.trackingGateway.update(projectPath, mrId, updates);
 
     return this.trackingGateway.getById(projectPath, mrId);
   }

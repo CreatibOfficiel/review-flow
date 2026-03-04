@@ -3,7 +3,7 @@ import type { Presenter } from '../../shared/foundation/presenter.base.js'
 import { Duration } from '../../entities/shared/duration.valueObject.js'
 
 export type StatusColor = 'gray' | 'blue' | 'green' | 'red' | 'orange'
-export type JobType = 'review' | 'followup'
+export type JobType = 'review' | 'followup' | 'fix'
 
 export interface JobStatusViewModel {
   identifier: string
@@ -65,7 +65,7 @@ export class JobStatusPresenter implements Presenter<JobStatus, JobStatusViewMod
   }
 
   private getJobTypeLabel(jobType: JobType | undefined): string {
-    return jobType === 'followup' ? 'Followup' : 'Review'
+    return jobType === 'followup' ? 'Followup' : jobType === 'fix' ? 'Fix' : 'Review'
   }
 
   private getStatusDisplay(status: JobStatus['status']): { statusLabel: string; statusColor: StatusColor } {

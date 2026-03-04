@@ -13,9 +13,13 @@ export interface ProjectConfig {
   defaultModel: 'sonnet' | 'opus';
   reviewSkill: string;
   reviewFollowupSkill: string;
+  reviewFixSkill?: string;
   language: Language;
   agents?: AgentDefinition[];
   followupAgents?: AgentDefinition[];
+  fixAgents?: AgentDefinition[];
+  maxFixIterations?: number;
+  autoFix?: boolean;
 }
 
 /**
@@ -84,15 +88,28 @@ export function loadProjectConfig(localPath: string): ProjectConfig | undefined 
     }
   }
 
+  // Validate fixAgents if present
+  if ('fixAgents' in parsed && parsed.fixAgents !== undefined) {
+    if (!validateAgents(parsed.fixAgents)) {
+      throw new Error(
+        'Invalid fixAgents format: must be array of { name: string, displayName: string }'
+      );
+    }
+  }
+
   return {
     github: Boolean(parsed.github),
     gitlab: Boolean(parsed.gitlab),
     defaultModel: parsed.defaultModel === 'opus' ? 'opus' : 'sonnet',
     reviewSkill: String(parsed.reviewSkill),
     reviewFollowupSkill: String(parsed.reviewFollowupSkill),
+    reviewFixSkill: parsed.reviewFixSkill ? String(parsed.reviewFixSkill) : undefined,
     language: parsed.language === 'fr' ? 'fr' : 'en',
     agents: parsed.agents as AgentDefinition[] | undefined,
     followupAgents: parsed.followupAgents as AgentDefinition[] | undefined,
+    fixAgents: parsed.fixAgents as AgentDefinition[] | undefined,
+    maxFixIterations: typeof parsed.maxFixIterations === 'number' ? parsed.maxFixIterations : undefined,
+    autoFix: typeof parsed.autoFix === 'boolean' ? parsed.autoFix : undefined,
   };
 }
 
@@ -129,5 +146,29 @@ export function getFollowupAgents(localPath: string): AgentDefinition[] | undefi
     return config?.followupAgents;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Get fix agents from project config or undefined for defaults
+ */
+export function getFixAgents(localPath: string): AgentDefinition[] | undefined {
+  try {
+    const config = loadProjectConfig(localPath);
+    return config?.fixAgents;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Get max fix iterations from project config, defaulting to 5
+ */
+export function getMaxFixIterations(localPath: string): number {
+  try {
+    const config = loadProjectConfig(localPath);
+    return config?.maxFixIterations ?? 5;
+  } catch {
+    return 5;
   }
 }

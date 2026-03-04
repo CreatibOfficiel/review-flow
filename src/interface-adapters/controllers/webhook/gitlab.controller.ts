@@ -19,8 +19,8 @@ import type { RecordPushUseCase } from '@/usecases/tracking/recordPush.usecase.j
 import type { TransitionStateUseCase } from '@/usecases/tracking/transitionState.usecase.js';
 import type { CheckFollowupNeededUseCase } from '@/usecases/tracking/checkFollowupNeeded.usecase.js';
 import type { SyncThreadsUseCase } from '@/usecases/tracking/syncThreads.usecase.js';
-import { loadProjectConfig, getProjectAgents, getFollowupAgents, getProjectLanguage } from '@/config/projectConfig.js';
-import { DEFAULT_AGENTS, DEFAULT_FOLLOWUP_AGENTS } from '@/entities/progress/agentDefinition.type.js';
+import { loadProjectConfig, getProjectAgents, getFollowupAgents, getFixAgents, getProjectLanguage } from '@/config/projectConfig.js';
+import { DEFAULT_AGENTS, DEFAULT_FOLLOWUP_AGENTS, DEFAULT_FIX_AGENTS } from '@/entities/progress/agentDefinition.type.js';
 import { parseReviewOutput } from '@/services/statsService.js';
 import { parseThreadActions } from '@/services/threadActionsParser.js';
 import { executeThreadActions, defaultCommandExecutor } from '@/services/threadActionsExecutor.js';
@@ -58,6 +58,174 @@ export interface GitLabWebhookDependencies {
   transitionState: TransitionStateUseCase;
   checkFollowupNeeded: CheckFollowupNeededUseCase;
   syncThreads: SyncThreadsUseCase;
+}
+
+/**
+ * Check if auto-fix should be triggered after a review/followup, and enqueue the fix job if so.
+ * Returns true if a fix job was enqueued.
+ */
+function maybeEnqueueFixJob(
+  job: ReviewJob,
+  logger: Logger,
+  trackingGateway: ReviewRequestTrackingGateway,
+  deps: GitLabWebhookDependencies,
+): boolean {
+  const mrId = `gitlab-${job.projectPath}-${job.mrNumber}`;
+  const updatedMr = trackingGateway.getById(job.localPath, mrId);
+  if (!updatedMr || updatedMr.state !== 'pending-fix') return false;
+
+  const projectConfig = loadProjectConfig(job.localPath);
+  const autoFixEnabled = projectConfig?.autoFix ?? false;
+  if (!autoFixEnabled) return false;
+
+  const maxIterations = projectConfig?.maxFixIterations ?? 5;
+  if (updatedMr.fixIterations >= maxIterations) {
+    logger.info(
+      { mrNumber: job.mrNumber, fixIterations: updatedMr.fixIterations, maxIterations },
+      'Max fix iterations reached, stopping auto-fix loop'
+    );
+    sendNotification(
+      'Auto-fix arrêté',
+      `MR !${job.mrNumber} - Max ${maxIterations} itérations atteint`,
+      logger
+    );
+    return false;
+  }
+
+  const skill = projectConfig?.reviewFixSkill || 'review-fix';
+  const fixJobId = createJobId('gitlab-fix', job.projectPath, job.mrNumber);
+  const fixJob: ReviewJob = {
+    id: fixJobId,
+    platform: 'gitlab',
+    projectPath: job.projectPath,
+    localPath: job.localPath,
+    mrNumber: job.mrNumber,
+    skill,
+    mrUrl: job.mrUrl,
+    sourceBranch: job.sourceBranch,
+    targetBranch: job.targetBranch,
+    jobType: 'fix',
+    language: getProjectLanguage(job.localPath),
+  };
+
+  enqueueReview(fixJob, async (j, signal) => {
+    sendNotification('Auto-fix démarré', `MR !${j.mrNumber} - ${j.projectPath} (itération ${updatedMr.fixIterations + 1})`, logger);
+
+    const mergeRequestId = `gitlab-${j.projectPath}-${j.mrNumber}`;
+    const contextGateway = deps.reviewContextGateway;
+    const threadFetchGw = deps.threadFetchGateway;
+    const diffMetadataFetchGw = deps.diffMetadataFetchGateway;
+
+    try {
+      const threads = threadFetchGw.fetchThreads(j.projectPath, j.mrNumber);
+      let diffMetadata: import('../../../entities/reviewContext/reviewContext.js').DiffMetadata | undefined;
+      try {
+        diffMetadata = diffMetadataFetchGw.fetchDiffMetadata(j.projectPath, j.mrNumber);
+      } catch (error) {
+        logger.warn(
+          { mrNumber: j.mrNumber, error: error instanceof Error ? error.message : String(error) },
+          'Failed to fetch diff metadata for fix, inline comments will be skipped'
+        );
+      }
+      const fixAgentsList = getFixAgents(j.localPath) ?? DEFAULT_FIX_AGENTS;
+      contextGateway.create({
+        localPath: j.localPath,
+        mergeRequestId,
+        platform: 'gitlab',
+        projectPath: j.projectPath,
+        mergeRequestNumber: j.mrNumber,
+        threads,
+        agents: fixAgentsList,
+        diffMetadata,
+      });
+      logger.info(
+        { mrNumber: j.mrNumber, threadsCount: threads.length, hasDiffMetadata: !!diffMetadata },
+        'Review context file created with threads for fix'
+      );
+
+      startWatchingReviewContext(j.id, j.localPath, mergeRequestId);
+    } catch (error) {
+      logger.warn(
+        { mrNumber: j.mrNumber, error: error instanceof Error ? error.message : String(error) },
+        'Failed to create review context file for fix, continuing without it'
+      );
+    }
+
+    const result = await invokeClaudeReview(j, logger, (progress, progressEvent) => {
+      updateJobProgress(j.id, progress, progressEvent);
+
+      const runningAgent = progress.agents.find(a => a.status === 'running');
+      const completedAgents = progress.agents
+        .filter(a => a.status === 'completed')
+        .map(a => a.name);
+
+      contextGateway.updateProgress(j.localPath, mergeRequestId, {
+        phase: progress.currentPhase,
+        currentStep: runningAgent?.name ?? null,
+        stepsCompleted: completedAgents,
+      });
+    }, signal);
+
+    stopWatchingReviewContext(mergeRequestId);
+
+    if (result.success) {
+      const parsed = parseReviewOutput(result.stdout);
+
+      // Execute actions from context file (thread replies, resolves, comments)
+      let threadResolveCount = 0;
+      const reviewContext = contextGateway.read(j.localPath, mergeRequestId);
+      if (reviewContext && reviewContext.actions.length > 0) {
+        threadResolveCount = reviewContext.actions.filter(a => a.type === 'THREAD_RESOLVE').length;
+        const contextActionResult = await executeActionsFromContext(
+          reviewContext,
+          j.localPath,
+          logger,
+          defaultCommandExecutor
+        );
+        logger.info(
+          { ...contextActionResult, threadResolveCount, mrNumber: j.mrNumber },
+          'Actions executed from context file for fix'
+        );
+      }
+
+      // Record fix completion
+      deps.recordCompletion.execute({
+        projectPath: j.localPath,
+        mrId: mergeRequestId,
+        reviewData: {
+          type: 'fix',
+          durationMs: result.durationMs,
+          score: parsed.score,
+          blocking: parsed.blocking,
+          warnings: parsed.warnings,
+          suggestions: parsed.suggestions,
+          threadsOpened: 0,
+          threadsClosed: threadResolveCount,
+        },
+      });
+
+      logger.info(
+        {
+          mrNumber: j.mrNumber,
+          durationMs: result.durationMs,
+          fixIteration: updatedMr.fixIterations + 1,
+        },
+        'Fix completed — push will trigger followup automatically'
+      );
+
+      sendNotification('Auto-fix terminé', `MR !${j.mrNumber} - ${j.projectPath}`, logger);
+    } else if (!result.cancelled) {
+      sendNotification('Auto-fix échoué', `MR !${j.mrNumber} - Code ${result.exitCode}`, logger);
+      throw new Error(`Fix failed with exit code ${result.exitCode}`);
+    }
+  });
+
+  logger.info(
+    { mrNumber: job.mrNumber, fixIteration: updatedMr.fixIterations + 1, maxIterations },
+    'Auto-fix job enqueued'
+  );
+
+  return true;
 }
 
 export async function handleGitLabWebhook(
@@ -386,6 +554,9 @@ export async function handleGitLabWebhook(
                 'Followup stats recorded and threads synced'
               );
 
+              // Auto-fix: if blocking issues remain after followup and autoFix is enabled
+              maybeEnqueueFixJob(j, logger, trackingGateway, deps);
+
               sendNotification('Review followup terminée', `MR !${j.mrNumber} - ${j.projectPath}`, logger);
             } else if (!result.cancelled) {
               sendNotification('Review followup échouée', `MR !${j.mrNumber} - Code ${result.exitCode}`, logger);
@@ -614,6 +785,9 @@ export async function handleGitLabWebhook(
         },
         'Review stats recorded'
       );
+
+      // Auto-fix: if blocking issues found and autoFix is enabled, enqueue fix job
+      maybeEnqueueFixJob(j, logger, trackingGateway, deps);
 
       sendNotification(
         'Review terminée',

@@ -37,6 +37,14 @@ export class ReviewJobFactory {
     })
   }
 
+  static createFix(overrides?: Partial<ReviewJob>): ReviewJob {
+    return this.create({
+      jobType: 'fix',
+      skill: 'review-fix',
+      ...overrides,
+    })
+  }
+
   static createGitHub(overrides?: Partial<ReviewJob>): ReviewJob {
     return this.create({
       id: 'github:test-owner/test-repo:123',

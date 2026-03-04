@@ -21,3 +21,10 @@ export const DEFAULT_FOLLOWUP_AGENTS: AgentDefinition[] = [
   { name: 'threads', displayName: 'Threads' },
   { name: 'report', displayName: 'Rapport' },
 ];
+
+export const DEFAULT_FIX_AGENTS: AgentDefinition[] = [
+  { name: 'context', displayName: 'Contexte' },
+  { name: 'apply-fixes', displayName: 'Corrections' },
+  { name: 'commit', displayName: 'Commit & Push' },
+  { name: 'report', displayName: 'Rapport' },
+];

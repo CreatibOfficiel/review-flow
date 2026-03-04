@@ -10,6 +10,7 @@ import {
   updateJobProgress,
   cancelJob,
   type ReviewJob,
+<<<<<<< HEAD
 } from '@/frameworks/queue/pQueueAdapter.js';
 import type { ReviewRequestTrackingGateway } from '@/interface-adapters/gateways/reviewRequestTracking.gateway.js';
 import type { TrackAssignmentUseCase } from '@/usecases/tracking/trackAssignment.usecase.js';
@@ -19,9 +20,12 @@ import { parseThreadActions } from '@/services/threadActionsParser.js';
 import { executeThreadActions, defaultCommandExecutor } from '@/services/threadActionsExecutor.js';
 import { executeActionsFromContext } from '@/services/contextActionsExecutor.js';
 import { invokeClaudeReview, sendNotification } from '@/claude/invoker.js';
+import { ReviewContextFileSystemGateway } from '@/interface-adapters/gateways/reviewContext.fileSystem.gateway.js';
+import { GitHubThreadFetchGateway, defaultGitHubExecutor } from '@/interface-adapters/gateways/threadFetch.github.gateway.js';
+import { GitHubDiffMetadataFetchGateway } from '@/interface-adapters/gateways/diffMetadataFetch.github.gateway.js';
 import { startWatchingReviewContext, stopWatchingReviewContext } from '@/main/websocket.js';
-import { getProjectAgents, getProjectLanguage } from '@/config/projectConfig.js';
-import { DEFAULT_AGENTS } from '@/entities/progress/agentDefinition.type.js';
+import { loadProjectConfig, getProjectAgents, getFixAgents, getProjectLanguage } from '@/config/projectConfig.js';
+import { DEFAULT_AGENTS, DEFAULT_FIX_AGENTS } from '@/entities/progress/agentDefinition.type.js';
 import type { ReviewContextGateway } from '@/entities/reviewContext/reviewContext.gateway.js';
 import type { ThreadFetchGateway } from '@/entities/threadFetch/threadFetch.gateway.js';
 import type { DiffMetadataFetchGateway } from '@/entities/diffMetadata/diffMetadata.gateway.js';
@@ -32,6 +36,155 @@ export interface GitHubWebhookDependencies {
   diffMetadataFetchGateway: DiffMetadataFetchGateway;
   trackAssignment: TrackAssignmentUseCase;
   recordCompletion: RecordReviewCompletionUseCase;
+}
+
+function maybeEnqueueGitHubFixJob(
+  job: ReviewJob,
+  logger: Logger,
+  trackingGateway: ReviewRequestTrackingGateway,
+  recordCompletion: RecordReviewCompletionUseCase,
+): boolean {
+  const mrId = `github-${job.projectPath}-${job.mrNumber}`;
+  const updatedMr = trackingGateway.getById(job.localPath, mrId);
+  if (!updatedMr || updatedMr.state !== 'pending-fix') return false;
+
+  const projectConfig = loadProjectConfig(job.localPath);
+  const autoFixEnabled = projectConfig?.autoFix ?? false;
+  if (!autoFixEnabled) return false;
+
+  const maxIterations = projectConfig?.maxFixIterations ?? 5;
+  if (updatedMr.fixIterations >= maxIterations) {
+    logger.info(
+      { prNumber: job.mrNumber, fixIterations: updatedMr.fixIterations, maxIterations },
+      'Max fix iterations reached, stopping auto-fix loop'
+    );
+    sendNotification(
+      'Auto-fix arrêté',
+      `PR #${job.mrNumber} - Max ${maxIterations} itérations atteint`,
+      logger
+    );
+    return false;
+  }
+
+  const skill = projectConfig?.reviewFixSkill || 'review-fix';
+  const fixJobId = createJobId('github-fix', job.projectPath, job.mrNumber);
+  const fixJob: ReviewJob = {
+    id: fixJobId,
+    platform: 'github',
+    projectPath: job.projectPath,
+    localPath: job.localPath,
+    mrNumber: job.mrNumber,
+    skill,
+    mrUrl: job.mrUrl,
+    sourceBranch: job.sourceBranch,
+    targetBranch: job.targetBranch,
+    jobType: 'fix',
+    language: getProjectLanguage(job.localPath),
+  };
+
+  enqueueReview(fixJob, async (j, signal) => {
+    sendNotification('Auto-fix démarré', `PR #${j.mrNumber} - ${j.projectPath} (itération ${updatedMr.fixIterations + 1})`, logger);
+
+    const mergeRequestId = `github-${j.projectPath}-${j.mrNumber}`;
+    const contextGateway = new ReviewContextFileSystemGateway();
+    const threadFetchGateway = new GitHubThreadFetchGateway(defaultGitHubExecutor);
+    const diffMetadataFetchGateway = new GitHubDiffMetadataFetchGateway(defaultGitHubExecutor);
+
+    try {
+      const threads = threadFetchGateway.fetchThreads(j.projectPath, j.mrNumber);
+      let diffMetadata: import('@/entities/reviewContext/reviewContext.js').DiffMetadata | undefined;
+      try {
+        diffMetadata = diffMetadataFetchGateway.fetchDiffMetadata(j.projectPath, j.mrNumber);
+      } catch (error) {
+        logger.warn(
+          { prNumber: j.mrNumber, error: error instanceof Error ? error.message : String(error) },
+          'Failed to fetch diff metadata for fix'
+        );
+      }
+      const fixAgentsList = getFixAgents(j.localPath) ?? DEFAULT_FIX_AGENTS;
+      contextGateway.create({
+        localPath: j.localPath,
+        mergeRequestId,
+        platform: 'github',
+        projectPath: j.projectPath,
+        mergeRequestNumber: j.mrNumber,
+        threads,
+        agents: fixAgentsList,
+        diffMetadata,
+      });
+
+      startWatchingReviewContext(j.id, j.localPath, mergeRequestId);
+    } catch (error) {
+      logger.warn(
+        { prNumber: j.mrNumber, error: error instanceof Error ? error.message : String(error) },
+        'Failed to create review context file for fix'
+      );
+    }
+
+    const result = await invokeClaudeReview(j, logger, (progress, progressEvent) => {
+      updateJobProgress(j.id, progress, progressEvent);
+
+      const runningAgent = progress.agents.find(a => a.status === 'running');
+      const completedAgents = progress.agents
+        .filter(a => a.status === 'completed')
+        .map(a => a.name);
+
+      contextGateway.updateProgress(j.localPath, mergeRequestId, {
+        phase: progress.currentPhase,
+        currentStep: runningAgent?.name ?? null,
+        stepsCompleted: completedAgents,
+      });
+    }, signal);
+
+    stopWatchingReviewContext(mergeRequestId);
+
+    if (result.success) {
+      const parsed = parseReviewOutput(result.stdout);
+
+      let threadResolveCount = 0;
+      const reviewContext = contextGateway.read(j.localPath, mergeRequestId);
+      if (reviewContext && reviewContext.actions.length > 0) {
+        threadResolveCount = reviewContext.actions.filter(a => a.type === 'THREAD_RESOLVE').length;
+        const contextActionResult = await executeActionsFromContext(
+          reviewContext,
+          j.localPath,
+          logger,
+          defaultCommandExecutor
+        );
+        logger.info(
+          { ...contextActionResult, threadResolveCount, prNumber: j.mrNumber },
+          'Actions executed from context file for fix'
+        );
+      }
+
+      recordCompletion.execute({
+        projectPath: j.localPath,
+        mrId: mergeRequestId,
+        reviewData: {
+          type: 'fix',
+          durationMs: result.durationMs,
+          score: parsed.score,
+          blocking: parsed.blocking,
+          warnings: parsed.warnings,
+          suggestions: parsed.suggestions,
+          threadsOpened: 0,
+          threadsClosed: threadResolveCount,
+        },
+      });
+
+      sendNotification('Auto-fix terminé', `PR #${j.mrNumber} - ${j.projectPath}`, logger);
+    } else if (!result.cancelled) {
+      sendNotification('Auto-fix échoué', `PR #${j.mrNumber} - Code ${result.exitCode}`, logger);
+      throw new Error(`Fix failed with exit code ${result.exitCode}`);
+    }
+  });
+
+  logger.info(
+    { prNumber: job.mrNumber, fixIteration: updatedMr.fixIterations + 1, maxIterations },
+    'Auto-fix job enqueued for GitHub PR'
+  );
+
+  return true;
 }
 
 export async function handleGitHubWebhook(
@@ -339,6 +492,9 @@ export async function handleGitHubWebhook(
         },
         'Review stats recorded'
       );
+
+      // Auto-fix: if blocking issues found and autoFix is enabled, enqueue fix job
+      maybeEnqueueGitHubFixJob(j, logger, trackingGateway, recordCompletion);
 
       sendNotification(
         'Review terminée',

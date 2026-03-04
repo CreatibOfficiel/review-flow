@@ -1,5 +1,5 @@
 export interface ReviewEvent {
-  type: 'review' | 'followup';
+  type: 'review' | 'followup' | 'fix';
   timestamp: string;
   durationMs: number;
   score: number | null;

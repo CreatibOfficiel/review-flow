@@ -8,7 +8,7 @@ import type { ReviewProgress, ProgressEvent } from '@/entities/progress/progress
 import { ProgressParser } from '@/frameworks/claude/progressParser.js';
 import { logInfo, logWarn, logError } from '@/frameworks/logging/logBuffer.js';
 import { getModel } from '@/frameworks/settings/runtimeSettings.js';
-import { getProjectAgents, getFollowupAgents } from '@/config/projectConfig.js';
+import { getProjectAgents, getFollowupAgents, getFixAgents } from '@/config/projectConfig.js';
 import { addReviewStats } from '@/services/statsService.js';
 import { FileSystemReviewRequestTrackingGateway } from '@/interface-adapters/gateways/fileSystem/reviewRequestTracking.fileSystem.js';
 import { ProjectStatsCalculator } from '@/interface-adapters/presenters/projectStats.calculator.js';
@@ -109,8 +109,30 @@ export type ProgressCallback = (progress: ReviewProgress, event?: ProgressEvent)
  * This instruction is AUTHORITATIVE and forces Claude to use MCP tools
  */
 function buildMcpSystemPrompt(job: ReviewJob): string {
-  return `
-# AUTOMATED REVIEW MODE - EXECUTE IMMEDIATELY
+  const isFix = job.jobType === 'fix';
+
+  const modeSection = isFix
+    ? `# AUTOMATED FIX MODE - EXECUTE IMMEDIATELY
+
+## CRITICAL EXECUTION RULES
+
+You are running in FULLY AUTOMATED, NON-INTERACTIVE FIX mode.
+- **EXECUTE the skill instructions step by step RIGHT NOW**
+- Do NOT produce a "plan" or "summary" of what you will do
+- Do NOT wait for approval, confirmation, or user input
+- Do NOT say "once approved", "when you confirm", or "the plan is ready"
+- Do NOT use EnterPlanMode or AskUserQuestion (they are disabled)
+- Your output goes to a log file, not to a human
+
+## FIX MODE — WRITE ACCESS ENABLED
+
+You are in **FIX MODE** — you MUST apply code fixes, commit, and push.
+- Read the review threads to understand what needs to be fixed
+- Apply minimal, targeted fixes to address each actionable comment
+- Do NOT refactor unrelated code or add features
+- Commit and push the changes
+- The push will trigger an automatic followup review to verify your fixes`
+    : `# AUTOMATED REVIEW MODE - EXECUTE IMMEDIATELY
 
 ## CRITICAL EXECUTION RULES
 
@@ -129,7 +151,10 @@ These rules are about WRITING production code. You are in **READ-ONLY review mod
 - These mandatory-before-coding rules do NOT apply to you
 - You CAN and SHOULD read/load any skill files referenced by the review skill (e.g. architecture/SKILL.md, tdd/SKILL.md) as audit references
 - Do NOT invoke skills as interactive workflows — READ them for review criteria only
-- JUST FOLLOW the review/followup skill instructions and EXECUTE each step
+- JUST FOLLOW the review/followup skill instructions and EXECUTE each step`;
+
+  return `
+${modeSection}
 
 ## Your Job Context
 - **Job ID**: \`${job.id}\`
@@ -269,14 +294,18 @@ export async function invokeClaudeReview(
     'Invocation Claude CLI'
   );
 
-  // Load project-specific agents configuration (use followup agents for followup jobs)
+  // Load project-specific agents configuration based on job type
+  const isFix = job.jobType === 'fix';
   const isFollowup = job.jobType === 'followup';
-  const projectAgents = isFollowup
-    ? getFollowupAgents(job.localPath)
-    : getProjectAgents(job.localPath);
+  const projectAgents = isFix
+    ? getFixAgents(job.localPath)
+    : isFollowup
+      ? getFollowupAgents(job.localPath)
+      : getProjectAgents(job.localPath);
 
   // Log to dashboard
-  logInfo(isFollowup ? 'Démarrage followup Claude' : 'Démarrage review Claude', {
+  const logLabel = isFix ? 'Démarrage fix Claude' : isFollowup ? 'Démarrage followup Claude' : 'Démarrage review Claude';
+  logInfo(logLabel, {
     jobId: job.id,
     mrNumber: job.mrNumber,
     skill: job.skill,
@@ -505,8 +534,8 @@ export async function invokeClaudeReview(
           outputLength: stdout.length,
         });
 
-        // Save review statistics (followups are not counted as reviews)
-        if (job.jobType !== 'followup') {
+        // Save review statistics (followups and fixes are not counted as reviews)
+        if (job.jobType !== 'followup' && job.jobType !== 'fix') {
           try {
             const mrId = `${job.platform}-${job.projectPath}-${job.mrNumber}`;
             const trackingGateway = new FileSystemReviewRequestTrackingGateway(new ProjectStatsCalculator());

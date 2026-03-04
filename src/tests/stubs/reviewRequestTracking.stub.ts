@@ -125,6 +125,9 @@ export class InMemoryReviewRequestTrackingGateway implements ReviewRequestTracki
     if (event.type === 'review') {
       mr.totalReviews++;
       data.stats.totalReviews++;
+    } else if (event.type === 'fix') {
+      mr.totalFixes++;
+      mr.fixIterations++;
     } else {
       mr.totalFollowups++;
       data.stats.totalFollowups++;
