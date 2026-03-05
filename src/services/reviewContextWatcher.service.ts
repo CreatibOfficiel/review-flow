@@ -16,17 +16,21 @@ export class ReviewContextWatcherService {
 
   start(localPath: string, mergeRequestId: string, callback: ProgressCallback): void {
     const interval = setInterval(() => {
-      const context = this.gateway.read(localPath, mergeRequestId)
-      if (context) {
-        const progressKey = JSON.stringify(context.progress)
-        if (progressKey !== this.lastProgress.get(mergeRequestId)) {
-          this.lastProgress.set(mergeRequestId, progressKey)
-          callback(context.progress)
+      try {
+        const context = this.gateway.read(localPath, mergeRequestId)
+        if (context) {
+          const progressKey = JSON.stringify(context.progress)
+          if (progressKey !== this.lastProgress.get(mergeRequestId)) {
+            this.lastProgress.set(mergeRequestId, progressKey)
+            callback(context.progress)
 
-          if (context.progress.phase === 'completed') {
-            this.stop(mergeRequestId)
+            if (context.progress.phase === 'completed') {
+              this.stop(mergeRequestId)
+            }
           }
         }
+      } catch {
+        // Ignore read errors (partial writes, etc.) — will retry on next poll
       }
     }, this.pollingIntervalMs)
     this.watchers.set(mergeRequestId, interval)
