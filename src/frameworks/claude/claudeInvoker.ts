@@ -90,6 +90,24 @@ export function ensureProjectMcpConfig(projectPath: string): void {
   }
 }
 
+/**
+ * Build MCP config JSON for --mcp-config flag.
+ * Returns a self-contained JSON string with ONLY the review-progress server.
+ * Used with --strict-mcp-config to isolate reviews from project .mcp.json
+ * (which may contain other MCP servers that cause timeouts).
+ */
+export function buildMcpConfigJson(): string {
+  const mcpServerPath = resolveMcpServerPath();
+  return JSON.stringify({
+    mcpServers: {
+      "review-progress": {
+        command: "node",
+        args: [mcpServerPath],
+      },
+    },
+  });
+}
+
 export function cleanupMcpContext(jobId: string): void {
   try {
     const filePath = getJobContextFilePath(jobId);
@@ -234,22 +252,28 @@ export async function invokeClaudeReview(
   // Build MCP system prompt injection
   const mcpSystemPrompt = buildMcpSystemPrompt(job);
 
+  // Build MCP config: isolated from project .mcp.json to avoid
+  // third-party MCP servers (e.g. gitnexus) causing initialization timeouts
+  const mcpConfigJson = buildMcpConfigJson();
+
   // Build arguments
   // --permission-mode bypassPermissions: automated review, no user to approve
   // --allowedTools / --disallowedTools: belt-and-suspenders to restrict tool scope
+  // --mcp-config + --strict-mcp-config: use ONLY review-progress MCP server
   const args = [
     '--print',
     '--model', model,
     '--permission-mode', 'bypassPermissions',
     '--append-system-prompt', mcpSystemPrompt,
+    '--mcp-config', mcpConfigJson,
+    '--strict-mcp-config',
     '--allowedTools', 'Read,Glob,Grep,Bash,Edit,Task,Skill,Write,LSP,mcp__review-progress__*',
     '--disallowedTools', 'EnterPlanMode,AskUserQuestion',
     '-p', prompt,
   ];
 
-  // Setup MCP: write context file and ensure project has .mcp.json
+  // Setup MCP job context file (used by MCP server to identify the review)
   writeMcpContext(job);
-  ensureProjectMcpConfig(job.localPath);
 
   logger.info(
     {
