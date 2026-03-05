@@ -15,7 +15,8 @@ import { createSetPhaseHandler } from "../interface-adapters/controllers/mcp/set
 import { createGetThreadsHandler } from "../interface-adapters/controllers/mcp/getThreads.handler.js";
 import { createAddActionHandler } from "../interface-adapters/controllers/mcp/addAction.handler.js";
 import { createSetResultHandler } from "../interface-adapters/controllers/mcp/setResult.handler.js";
-import { getProjectAgents, getFollowupAgents } from "../config/projectConfig.js";
+import { getProjectAgents, getFollowupAgents, getFixAgents } from "../config/projectConfig.js";
+import { DEFAULT_AGENTS, DEFAULT_FOLLOWUP_AGENTS, DEFAULT_FIX_AGENTS } from "../entities/progress/agentDefinition.type.js";
 import { getJobContextFilePath } from "../shared/services/mcpJobContext.js";
 import { mcpLogger } from "./mcpLogger.js";
 
@@ -23,7 +24,7 @@ interface McpJobContext {
 	jobId: string;
 	localPath: string;
 	mergeRequestId: string;
-	jobType: "review" | "followup";
+	jobType: "review" | "followup" | "fix";
 }
 
 export function loadJobContextFromFile(jobId: string): McpJobContext | null {
@@ -52,7 +53,7 @@ export function getJobContextFromEnv(): McpJobContext | null {
 	const jobId = process.env.MCP_JOB_ID;
 	const localPath = process.env.MCP_LOCAL_PATH;
 	const mergeRequestId = process.env.MCP_MERGE_REQUEST_ID;
-	const jobType = (process.env.MCP_JOB_TYPE as "review" | "followup") || "review";
+	const jobType = (process.env.MCP_JOB_TYPE as "review" | "followup" | "fix") || "review";
 
 	if (!jobId || !localPath || !mergeRequestId) {
 		return null;
@@ -78,11 +79,18 @@ export function ensureJobContextLoaded(jobId: string, mcpDeps: McpDependencies):
 	});
 	mcpLogger.info("Job context lazy-loaded and registered", { jobId });
 
-	const agents = jobContext.jobType === "followup"
-		? getFollowupAgents(jobContext.localPath)
-		: getProjectAgents(jobContext.localPath);
+	const agents = jobContext.jobType === "fix"
+		? getFixAgents(jobContext.localPath)
+		: jobContext.jobType === "followup"
+			? getFollowupAgents(jobContext.localPath)
+			: getProjectAgents(jobContext.localPath);
 
-	const agentNames = agents?.map((a) => a.name) ?? ["analysis"];
+	const defaultAgents = jobContext.jobType === "fix"
+		? DEFAULT_FIX_AGENTS
+		: jobContext.jobType === "followup"
+			? DEFAULT_FOLLOWUP_AGENTS
+			: DEFAULT_AGENTS;
+	const agentNames = (agents ?? defaultAgents).map((a) => a.name);
 	mcpDeps.progressGateway.createProgress(jobContext.jobId, agentNames);
 	mcpLogger.info("Progress created via lazy loading", { jobId, agentNames });
 }

@@ -795,6 +795,63 @@ export async function handleGitLabWebhook(
     'MR tracked for review'
   );
 
+  // 5b. Fix-first: if open threads exist from a previous review, fix them before reviewing
+  const threadFetchGwAssignment = deps.threadFetchGateway;
+  let existingThreads: import('../../../entities/reviewContext/reviewContext.js').ReviewContextThread[] = [];
+  try {
+    existingThreads = threadFetchGwAssignment.fetchThreads(filterResult.projectPath, filterResult.mergeRequestNumber);
+  } catch (error) {
+    logger.warn(
+      { mrNumber: filterResult.mergeRequestNumber, error: error instanceof Error ? error.message : String(error) },
+      'Failed to fetch existing threads for fix-first check, proceeding with normal review'
+    );
+  }
+  const openThreads = existingThreads.filter(t => t.status === 'open');
+
+  if (openThreads.length > 0) {
+    const projectConfigForFix = loadProjectConfig(repoConfig.localPath);
+    const autoFixEnabled = projectConfigForFix?.autoFix ?? false;
+
+    if (autoFixEnabled) {
+      logger.info(
+        { mrNumber: filterResult.mergeRequestNumber, openThreads: openThreads.length },
+        'Open threads found on assignment, running fix-first before review'
+      );
+
+      // Set state to pending-fix so maybeEnqueueFixJob recognizes it
+      const mrId = `gitlab-${filterResult.projectPath}-${filterResult.mergeRequestNumber}`;
+      trackingGateway.update(repoConfig.localPath, mrId, {
+        state: 'pending-fix',
+        openThreads: openThreads.length,
+      });
+
+      const fixFirstJob: ReviewJob = {
+        id: createJobId('gitlab', filterResult.projectPath, filterResult.mergeRequestNumber),
+        platform: 'gitlab',
+        projectPath: filterResult.projectPath,
+        localPath: repoConfig.localPath,
+        mrNumber: filterResult.mergeRequestNumber,
+        skill: repoConfig.skill,
+        mrUrl: filterResult.mergeRequestUrl,
+        sourceBranch: filterResult.sourceBranch,
+        targetBranch: filterResult.targetBranch,
+        jobType: 'review',
+        language: getProjectLanguage(repoConfig.localPath),
+      };
+
+      const fixEnqueued = maybeEnqueueFixJob(fixFirstJob, logger, trackingGateway, deps);
+
+      if (fixEnqueued) {
+        reply.status(202).send({
+          status: 'fix-first',
+          message: `${openThreads.length} open threads found, fixing before review`,
+        });
+        return;
+      }
+      // If fix not enqueued (max iterations, autoFix disabled at project level, etc.), fall through to normal review
+    }
+  }
+
   // 6. Create and enqueue job
   const jobId = createJobId('gitlab', filterResult.projectPath, filterResult.mergeRequestNumber);
   const job: ReviewJob = {
