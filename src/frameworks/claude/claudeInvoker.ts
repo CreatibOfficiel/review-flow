@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { Logger } from 'pino';
 import type { ReviewJob } from '@/frameworks/queue/pQueueAdapter.js';
 import type { ReviewProgress, ProgressEvent } from '@/entities/progress/progress.type.js';
+import { DEFAULT_FIX_AGENTS, DEFAULT_FOLLOWUP_AGENTS } from '@/entities/progress/agentDefinition.type.js';
 import { ProgressParser } from '@/frameworks/claude/progressParser.js';
 import { logInfo, logWarn, logError } from '@/frameworks/logging/logBuffer.js';
 import { getModel } from '@/frameworks/settings/runtimeSettings.js';
@@ -305,9 +306,9 @@ export async function invokeClaudeReview(
   const isFix = job.jobType === 'fix';
   const isFollowup = job.jobType === 'followup';
   const projectAgents = isFix
-    ? getFixAgents(job.localPath)
+    ? (getFixAgents(job.localPath) ?? DEFAULT_FIX_AGENTS)
     : isFollowup
-      ? getFollowupAgents(job.localPath)
+      ? (getFollowupAgents(job.localPath) ?? DEFAULT_FOLLOWUP_AGENTS)
       : getProjectAgents(job.localPath);
 
   // Log to dashboard
