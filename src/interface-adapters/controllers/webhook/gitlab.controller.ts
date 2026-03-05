@@ -169,8 +169,6 @@ function maybeEnqueueFixJob(
     stopWatchingReviewContext(mergeRequestId);
 
     if (result.success) {
-      const parsed = parseReviewOutput(result.stdout);
-
       // Execute actions from context file (thread replies, resolves, comments)
       let threadResolveCount = 0;
       const reviewContext = contextGateway.read(j.localPath, mergeRequestId);
@@ -187,6 +185,11 @@ function maybeEnqueueFixJob(
           'Actions executed from context file for fix'
         );
       }
+
+      // Prefer structured result from MCP set_result, fallback to stdout parsing
+      const parsed = reviewContext?.result
+        ? { score: reviewContext.result.score, blocking: reviewContext.result.blocking, warnings: reviewContext.result.warnings, suggestions: reviewContext.result.suggestions }
+        : parseReviewOutput(result.stdout);
 
       // Record fix completion
       deps.recordCompletion.execute({
@@ -476,9 +479,6 @@ export async function handleGitLabWebhook(
             stopWatchingReviewContext(mergeRequestId);
 
             if (result.success) {
-              // Parse review output for stats
-              const parsed = parseReviewOutput(result.stdout);
-
               let threadResolveCount = 0;
 
               // PRIMARY: Execute actions from context file (agent writes actions here)
@@ -519,6 +519,11 @@ export async function handleGitLabWebhook(
                   );
                 }
               }
+
+              // Prefer structured result from MCP set_result, fallback to stdout parsing
+              const parsed = reviewContext?.result
+                ? { score: reviewContext.result.score, blocking: reviewContext.result.blocking, warnings: reviewContext.result.warnings, suggestions: reviewContext.result.suggestions }
+                : parseReviewOutput(result.stdout);
 
               // Sync threads from GitLab FIRST to get real state after followup resolves threads
               const mrId = `gitlab-${j.projectPath}-${j.mrNumber}`;
@@ -657,8 +662,6 @@ export async function handleGitLabWebhook(
             stopWatchingReviewContext(mergeRequestId);
 
             if (result.success) {
-              const parsed = parseReviewOutput(result.stdout);
-
               const reviewContext = contextGateway.read(j.localPath, mergeRequestId);
               if (reviewContext && reviewContext.actions.length > 0) {
                 const contextActionResult = await executeActionsFromContext(
@@ -691,6 +694,11 @@ export async function handleGitLabWebhook(
                   );
                 }
               }
+
+              // Prefer structured result from MCP set_result, fallback to stdout parsing
+              const parsed = reviewContext?.result
+                ? { score: reviewContext.result.score, blocking: reviewContext.result.blocking, warnings: reviewContext.result.warnings, suggestions: reviewContext.result.suggestions }
+                : parseReviewOutput(result.stdout);
 
               const mrId = `gitlab-${j.projectPath}-${j.mrNumber}`;
               const updatedMr = syncThreads.execute({ projectPath: j.localPath, mrId });
@@ -885,9 +893,6 @@ export async function handleGitLabWebhook(
         logger
       );
     } else if (result.success) {
-      // Parse review output for stats
-      const parsed = parseReviewOutput(result.stdout);
-
       // PRIMARY: Execute actions from context file (agent writes actions here)
       const reviewContext = contextGateway.read(j.localPath, mergeRequestId);
       if (reviewContext && reviewContext.actions.length > 0) {
@@ -924,6 +929,11 @@ export async function handleGitLabWebhook(
           );
         }
       }
+
+      // Prefer structured result from MCP set_result, fallback to stdout parsing
+      const parsed = reviewContext?.result
+        ? { score: reviewContext.result.score, blocking: reviewContext.result.blocking, warnings: reviewContext.result.warnings, suggestions: reviewContext.result.suggestions }
+        : parseReviewOutput(result.stdout);
 
       // Record review completion with parsed stats
       // Only blocking issues count as open threads - warnings are informational

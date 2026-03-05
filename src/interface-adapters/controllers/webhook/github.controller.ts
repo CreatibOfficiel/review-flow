@@ -139,8 +139,6 @@ function maybeEnqueueGitHubFixJob(
     stopWatchingReviewContext(mergeRequestId);
 
     if (result.success) {
-      const parsed = parseReviewOutput(result.stdout);
-
       let threadResolveCount = 0;
       const reviewContext = contextGateway.read(j.localPath, mergeRequestId);
       if (reviewContext && reviewContext.actions.length > 0) {
@@ -156,6 +154,11 @@ function maybeEnqueueGitHubFixJob(
           'Actions executed from context file for fix'
         );
       }
+
+      // Prefer structured result from MCP set_result, fallback to stdout parsing
+      const parsed = reviewContext?.result
+        ? { score: reviewContext.result.score, blocking: reviewContext.result.blocking, warnings: reviewContext.result.warnings, suggestions: reviewContext.result.suggestions }
+        : parseReviewOutput(result.stdout);
 
       recordCompletion.execute({
         projectPath: j.localPath,
@@ -427,9 +430,6 @@ export async function handleGitHubWebhook(
         logger
       );
     } else if (result.success) {
-      // Parse review output for stats
-      const parsed = parseReviewOutput(result.stdout);
-
       // Execute thread actions from stdout markers (backward compatibility)
       const threadActions = parseThreadActions(result.stdout);
       if (threadActions.length > 0) {
@@ -464,6 +464,11 @@ export async function handleGitHubWebhook(
           'Actions executed from context file'
         );
       }
+
+      // Prefer structured result from MCP set_result, fallback to stdout parsing
+      const parsed = reviewContext?.result
+        ? { score: reviewContext.result.score, blocking: reviewContext.result.blocking, warnings: reviewContext.result.warnings, suggestions: reviewContext.result.suggestions }
+        : parseReviewOutput(result.stdout);
 
       // Record review completion with parsed stats
       // Only blocking issues count as open threads - warnings are informational

@@ -211,6 +211,12 @@ add_action({ jobId: "${job.id}", type: "POST_COMMENT", body: "..." })
 add_action({ jobId: "${job.id}", type: "POST_INLINE_COMMENT", filePath: "src/file.ts", line: 42, body: "..." })
 \`\`\`
 
+### Review Result (MANDATORY - call at the end of every review)
+\`\`\`
+set_result({ jobId: "${job.id}", blocking: X, warnings: X, suggestions: X, score: X, verdict: "ready_to_merge"|"needs_fixes"|"needs_discussion" })
+\`\`\`
+You MUST call \`set_result\` before \`set_phase({ phase: "completed" })\`. This is how the system determines whether to trigger auto-fix.
+
 ### Inline Comments on Diff
 Use \`POST_INLINE_COMMENT\` to post comments directly on specific lines in the diff.
 - **filePath**: The file path relative to the repository root
@@ -227,7 +233,8 @@ Use \`POST_INLINE_COMMENT\` to post comments directly on specific lines in the d
 5. **Threads**: \`start_agent({ jobId: "${job.id}", agentName: "threads" })\` then \`complete_agent\`
 6. **Report**: \`start_agent({ jobId: "${job.id}", agentName: "report" })\` then \`complete_agent\`
 7. **Publishing**: \`set_phase({ jobId: "${job.id}", phase: "publishing" })\`
-8. **End**: \`set_phase({ jobId: "${job.id}", phase: "completed" })\`
+8. **Result**: \`set_result({ jobId: "${job.id}", blocking: X, warnings: X, suggestions: X, score: X, verdict: "..." })\`
+9. **End**: \`set_phase({ jobId: "${job.id}", phase: "completed" })\`
 
 **VIOLATIONS**:
 - Producing a "plan" instead of executing → Review will be empty

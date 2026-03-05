@@ -14,6 +14,7 @@ import { createCompleteAgentHandler } from "../interface-adapters/controllers/mc
 import { createSetPhaseHandler } from "../interface-adapters/controllers/mcp/setPhase.handler.js";
 import { createGetThreadsHandler } from "../interface-adapters/controllers/mcp/getThreads.handler.js";
 import { createAddActionHandler } from "../interface-adapters/controllers/mcp/addAction.handler.js";
+import { createSetResultHandler } from "../interface-adapters/controllers/mcp/setResult.handler.js";
 import { getProjectAgents, getFollowupAgents } from "../config/projectConfig.js";
 import { getJobContextFilePath } from "../shared/services/mcpJobContext.js";
 import { mcpLogger } from "./mcpLogger.js";
@@ -172,6 +173,26 @@ const TOOL_DEFINITIONS = [
 			required: ["jobId", "type"],
 		},
 	},
+	{
+		name: "set_result",
+		description: "Set the final review result with statistics and verdict. MUST be called at the end of every review.",
+		inputSchema: {
+			type: "object" as const,
+			properties: {
+				jobId: { type: "string", description: "The job ID for the review" },
+				blocking: { type: "number", description: "Number of blocking issues found" },
+				warnings: { type: "number", description: "Number of warnings found" },
+				suggestions: { type: "number", description: "Number of suggestions found" },
+				score: { type: "number", description: "Review score (0-10)" },
+				verdict: {
+					type: "string",
+					enum: ["ready_to_merge", "needs_fixes", "needs_discussion"],
+					description: "Review verdict",
+				},
+			},
+			required: ["jobId", "blocking", "warnings", "suggestions", "score", "verdict"],
+		},
+	},
 ];
 
 export async function startMcpServer(): Promise<void> {
@@ -197,6 +218,10 @@ export async function startMcpServer(): Promise<void> {
 		jobContextGateway: mcpDeps.jobContextGateway,
 		reviewContextGateway: mcpDeps.reviewContextGateway,
 	});
+	const setResultHandler = createSetResultHandler({
+		jobContextGateway: mcpDeps.jobContextGateway,
+		reviewContextGateway: mcpDeps.reviewContextGateway,
+	});
 
 	const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
 		get_workflow: getWorkflowHandler,
@@ -205,6 +230,7 @@ export async function startMcpServer(): Promise<void> {
 		set_phase: setPhaseHandler,
 		get_threads: getThreadsHandler,
 		add_action: addActionHandler,
+		set_result: setResultHandler,
 	};
 
 	const server = new Server(
