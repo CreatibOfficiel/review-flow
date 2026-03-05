@@ -57,7 +57,7 @@ describe('RecordReviewCompletionUseCase', () => {
     const result = useCase.execute({
       projectPath: '/project',
       mrId: 'mr-1',
-      reviewData: { ...reviewData, blocking: 0, threadsOpened: 0 },
+      reviewData: { ...reviewData, blocking: 0, warnings: 0, threadsOpened: 0 },
     });
 
     expect(result?.state).toBe('pending-approval');

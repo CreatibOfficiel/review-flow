@@ -56,13 +56,13 @@ export class RecordReviewCompletionUseCase implements UseCase<RecordReviewComple
       latestScore = reviewData.score;
     }
 
-    const hasBlockingIssues = reviewData.blocking > 0 || openThreads > 0;
+    const hasActionableIssues = reviewData.blocking > 0 || reviewData.warnings > 0 || openThreads > 0;
 
     const updates: Partial<TrackedMr> = {
       openThreads,
       totalThreads,
       latestScore,
-      state: hasBlockingIssues ? 'pending-fix' : 'pending-approval',
+      state: hasActionableIssues ? 'pending-fix' : 'pending-approval',
     };
 
     // Reset fix iteration counter when a fresh review starts
