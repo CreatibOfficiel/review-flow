@@ -284,6 +284,7 @@ export function findRepositoryByProjectPath(projectPath: string): RepositoryConf
     if (!repo.enabled) return false;
     const urlPath = repo.remoteUrl
       .replace(/^https?:\/\/[^/]+\//, '')
+      .replace(/^[^@]+@[^:]+:/, '')
       .replace(/\.git$/, '')
       .toLowerCase();
     return urlPath === normalizedPath;
