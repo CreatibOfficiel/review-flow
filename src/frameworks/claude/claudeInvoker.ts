@@ -132,7 +132,14 @@ You are in **FIX MODE** — you MUST apply code fixes, commit, and push.
 - Apply minimal, targeted fixes to address each actionable comment
 - Do NOT refactor unrelated code or add features
 - Commit and push the changes
-- The push will trigger an automatic followup review to verify your fixes`
+- The push will trigger an automatic followup review to verify your fixes
+
+## Previous Review Findings
+
+The review context file may contain \`previousFindings\` (structured array with severity, description, file, line) and \`previousReport\` (full report text from the review that triggered this fix).
+- Use \`get_threads\` to read threads, AND also READ the context file directly to access \`previousFindings\` and \`previousReport\`
+- Do NOT rely solely on threads — warnings and suggestions from the report may not have corresponding threads
+- Address ALL actionable items from previousFindings, not just open threads`
     : `# AUTOMATED REVIEW MODE - EXECUTE IMMEDIATELY
 
 ## CRITICAL EXECUTION RULES
