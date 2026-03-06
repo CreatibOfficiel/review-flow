@@ -934,7 +934,19 @@ export async function handleGitLabWebhook(
     return;
   }
 
-  // 5. Track MR assignment with user info
+  // 5. Check if MR is already tracked and active — skip re-assign to avoid duplicate reviews
+  const existingMrId = `gitlab-${filterResult.projectPath}-${filterResult.mergeRequestNumber}`;
+  const existingMr = trackingGateway.getById(repoConfig.localPath, existingMrId);
+  if (existingMr && ['pending-review', 'pending-fix', 'pending-approval'].includes(existingMr.state)) {
+    logger.info(
+      { mrNumber: filterResult.mergeRequestNumber, state: existingMr.state },
+      'MR already tracked and active, skipping re-assign to avoid duplicate review'
+    );
+    reply.status(200).send({ status: 'ignored', reason: `MR already tracked in state ${existingMr.state}` });
+    return;
+  }
+
+  // Track MR assignment with user info
   // Use MR assignee (actual owner), not webhook trigger (who added the reviewer)
   const mrTitle = event.object_attributes?.title || `MR !${filterResult.mergeRequestNumber}`;
   const mrAssignee = event.assignees?.[0];

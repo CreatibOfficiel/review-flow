@@ -327,6 +327,7 @@ describe('handleGitLabWebhook', () => {
     });
 
     it('should create review context via injected gateway when review is enqueued', async () => {
+      mockGateway.getById.mockReturnValue(null);
       vi.mocked(invokeClaudeReview).mockResolvedValue({
         success: false,
         cancelled: true,
@@ -358,6 +359,7 @@ describe('handleGitLabWebhook', () => {
     });
 
     it('should use injected threadFetchGateway to fetch threads when review is enqueued', async () => {
+      mockGateway.getById.mockReturnValue(null);
       const stubThreadFetch = { fetchThreads: vi.fn(() => []) };
       const stubDiffMetadataFetch = { fetchDiffMetadata: vi.fn(() => ({ baseSha: 'a', headSha: 'b', startSha: 'c' })) };
 
