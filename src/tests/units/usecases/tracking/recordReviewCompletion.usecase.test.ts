@@ -57,10 +57,25 @@ describe('RecordReviewCompletionUseCase', () => {
     const result = useCase.execute({
       projectPath: '/project',
       mrId: 'mr-1',
-      reviewData: { ...reviewData, blocking: 0, warnings: 0, threadsOpened: 0 },
+      reviewData: { ...reviewData, blocking: 0, warnings: 0, suggestions: 0, threadsOpened: 0 },
     });
 
     expect(result?.state).toBe('pending-approval');
+  });
+
+  it('should transition to pending-fix when only suggestions exist', () => {
+    const gateway = new InMemoryReviewRequestTrackingGateway();
+    const mr = TrackedMrFactory.create({ id: 'mr-1', state: 'pending-review', openThreads: 0 });
+    gateway.create('/project', mr);
+    const useCase = new RecordReviewCompletionUseCase(gateway);
+
+    const result = useCase.execute({
+      projectPath: '/project',
+      mrId: 'mr-1',
+      reviewData: { ...reviewData, blocking: 0, warnings: 0, suggestions: 3, threadsOpened: 0 },
+    });
+
+    expect(result?.state).toBe('pending-fix');
   });
 
   it('should track open threads from review', () => {

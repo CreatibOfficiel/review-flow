@@ -56,7 +56,7 @@ export class RecordReviewCompletionUseCase implements UseCase<RecordReviewComple
       latestScore = reviewData.score;
     }
 
-    const hasActionableIssues = reviewData.blocking > 0 || reviewData.warnings > 0 || openThreads > 0;
+    const hasActionableIssues = reviewData.blocking > 0 || reviewData.warnings > 0 || suggestions > 0 || openThreads > 0;
 
     const updates: Partial<TrackedMr> = {
       openThreads,
