@@ -3,6 +3,7 @@ import type { ReviewContextGateway } from "../../entities/reviewContext/reviewCo
 import {
 	reviewContextResultSchema,
 	type ReviewContextResult,
+	type Finding,
 } from "../../entities/reviewContext/reviewContextAction.schema.js";
 
 export type SetResultInput = {
@@ -11,6 +12,7 @@ export type SetResultInput = {
 	suggestions: number;
 	score: number;
 	verdict: "ready_to_merge" | "needs_fixes" | "needs_discussion";
+	findings?: Finding[];
 };
 
 export type SetResultResult =

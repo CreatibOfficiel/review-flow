@@ -19,12 +19,22 @@ export type {
 // Keep ReviewContextResult here as it's specific to this context
 import { z } from 'zod'
 
+export const findingSchema = z.object({
+  severity: z.enum(['blocking', 'warning', 'suggestion']),
+  description: z.string(),
+  file: z.string().optional(),
+  line: z.number().optional(),
+})
+
+export type Finding = z.infer<typeof findingSchema>
+
 export const reviewContextResultSchema = z.object({
   blocking: z.number(),
   warnings: z.number(),
   suggestions: z.number(),
   score: z.number(),
   verdict: z.enum(['ready_to_merge', 'needs_fixes', 'needs_discussion']),
+  findings: z.array(findingSchema).optional(),
 })
 
 export type ReviewContextResult = z.infer<typeof reviewContextResultSchema>
