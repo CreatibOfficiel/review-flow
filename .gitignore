@@ -37,7 +37,6 @@ coverage/
 logs/security/
 .claude/skills
 .claude/memory
-CLAUDE.md
 
 .mcp.json
 
@@ -52,7 +51,9 @@ claude-review.desktop
 *.p12
 *.pfx
 
-.claude
+.claude/settings.local.json
+.claude/reviews
+.claude/worktrees
 
 # VitePress
 docs/.vitepress/dist
