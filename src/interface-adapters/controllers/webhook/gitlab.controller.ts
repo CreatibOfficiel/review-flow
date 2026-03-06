@@ -222,8 +222,11 @@ function maybeEnqueueFixJob(
           durationMs: result.durationMs,
           fixIteration: updatedMr.fixIterations + 1,
         },
-        'Fix completed — push will trigger followup automatically'
+        'Fix completed — enqueuing followup directly'
       );
+
+      // Enqueue followup directly after fix (don't rely on webhook push — race condition)
+      enqueueFollowupJob(j, logger, trackingGateway, deps);
 
       sendNotification('Auto-fix terminé', `MR !${j.mrNumber} - ${j.projectPath}`, logger);
     } else if (!result.cancelled) {
@@ -238,6 +241,161 @@ function maybeEnqueueFixJob(
   );
 
   return true;
+}
+
+/**
+ * Enqueue a followup review directly after a fix completes.
+ * This avoids the race condition where the fix's push webhook arrives
+ * before recordCompletion updates lastReviewAt, causing needsFollowup to return false.
+ */
+function enqueueFollowupJob(
+  job: ReviewJob,
+  logger: Logger,
+  trackingGateway: ReviewRequestTrackingGateway,
+  deps: GitLabWebhookDependencies,
+): void {
+  const mrId = `gitlab-${job.projectPath}-${job.mrNumber}`;
+  const mr = trackingGateway.getById(job.localPath, mrId);
+  if (!mr) return;
+
+  if (mr.autoFollowup === false) {
+    logger.info({ mrNumber: job.mrNumber }, 'Auto-followup disabled for this MR, skipping post-fix followup');
+    return;
+  }
+
+  const projectConfig = loadProjectConfig(job.localPath);
+  const skill = projectConfig?.reviewFollowupSkill || 'review-followup';
+  const followupJobId = createJobId('gitlab-followup', job.projectPath, job.mrNumber);
+  const followupJob: ReviewJob = {
+    id: followupJobId,
+    platform: 'gitlab',
+    projectPath: job.projectPath,
+    localPath: job.localPath,
+    mrNumber: job.mrNumber,
+    skill,
+    mrUrl: job.mrUrl,
+    sourceBranch: job.sourceBranch,
+    targetBranch: job.targetBranch,
+    jobType: 'followup',
+  };
+
+  const recordCompletion = deps.recordCompletion;
+  const syncThreads = deps.syncThreads;
+
+  enqueueReview(followupJob, async (j, signal) => {
+    sendNotification('Review followup démarrée', `MR !${j.mrNumber} - ${j.projectPath}`, logger);
+
+    const mergeRequestId = `gitlab-${j.projectPath}-${j.mrNumber}`;
+    const contextGateway = deps.reviewContextGateway;
+    const threadFetchGw = deps.threadFetchGateway;
+    const diffMetadataFetchGw = deps.diffMetadataFetchGateway;
+
+    try {
+      const threads = threadFetchGw.fetchThreads(j.projectPath, j.mrNumber);
+      let diffMetadata: import('../../../entities/reviewContext/reviewContext.js').DiffMetadata | undefined;
+      try {
+        diffMetadata = diffMetadataFetchGw.fetchDiffMetadata(j.projectPath, j.mrNumber);
+      } catch (error) {
+        logger.warn(
+          { mrNumber: j.mrNumber, error: error instanceof Error ? error.message : String(error) },
+          'Failed to fetch diff metadata for post-fix followup, inline comments will be skipped'
+        );
+      }
+      const followupAgentsList = getFollowupAgents(j.localPath) ?? DEFAULT_FOLLOWUP_AGENTS;
+      contextGateway.create({
+        localPath: j.localPath,
+        mergeRequestId,
+        platform: 'gitlab',
+        projectPath: j.projectPath,
+        mergeRequestNumber: j.mrNumber,
+        threads,
+        agents: followupAgentsList,
+        diffMetadata,
+      });
+      logger.info(
+        { mrNumber: j.mrNumber, threadsCount: threads.length, hasDiffMetadata: !!diffMetadata },
+        'Review context file created with threads for post-fix followup'
+      );
+
+      startWatchingReviewContext(j.id, j.localPath, mergeRequestId);
+    } catch (error) {
+      logger.warn(
+        { mrNumber: j.mrNumber, error: error instanceof Error ? error.message : String(error) },
+        'Failed to create review context file for post-fix followup, continuing without it'
+      );
+    }
+
+    const result = await invokeClaudeReview(j, logger, (progress, progressEvent) => {
+      updateJobProgress(j.id, progress, progressEvent);
+
+      const runningAgent = progress.agents.find(a => a.status === 'running');
+      const completedAgents = progress.agents
+        .filter(a => a.status === 'completed')
+        .map(a => a.name);
+
+      contextGateway.updateProgress(j.localPath, mergeRequestId, {
+        phase: progress.currentPhase,
+        currentStep: runningAgent?.name ?? null,
+        stepsCompleted: completedAgents,
+      });
+    }, signal);
+
+    stopWatchingReviewContext(mergeRequestId);
+
+    if (result.success) {
+      let threadResolveCount = 0;
+
+      const reviewContext = contextGateway.read(j.localPath, mergeRequestId);
+      if (reviewContext && reviewContext.actions.length > 0) {
+        threadResolveCount = reviewContext.actions.filter(a => a.type === 'THREAD_RESOLVE').length;
+        const repoConfig = findRepositoryByProjectPath(j.projectPath);
+        const baseUrl = repoConfig ? extractBaseUrl(repoConfig.remoteUrl) : null;
+        const contextActionResult = await executeActionsFromContext(
+          reviewContext,
+          j.localPath,
+          logger,
+          defaultCommandExecutor,
+          baseUrl,
+        );
+        logger.info(
+          { ...contextActionResult, threadResolveCount, mrNumber: j.mrNumber },
+          'Actions executed from context file for post-fix followup'
+        );
+      }
+
+      const parsed = reviewContext?.result
+        ? { score: reviewContext.result.score, blocking: reviewContext.result.blocking, warnings: reviewContext.result.warnings, suggestions: reviewContext.result.suggestions }
+        : parseReviewOutput(result.stdout);
+
+      const updatedMrId = `gitlab-${j.projectPath}-${j.mrNumber}`;
+      syncThreads.execute({ projectPath: j.localPath, mrId: updatedMrId });
+
+      recordCompletion.execute({
+        projectPath: j.localPath,
+        mrId: updatedMrId,
+        reviewData: {
+          type: 'followup',
+          durationMs: result.durationMs,
+          score: parsed.score,
+          blocking: parsed.blocking,
+          warnings: parsed.warnings,
+          suggestions: parsed.suggestions,
+          threadsOpened: 0,
+          threadsClosed: threadResolveCount,
+        },
+      });
+
+      // Auto-fix again if blocking issues remain
+      maybeEnqueueFixJob(j, logger, trackingGateway, deps);
+
+      sendNotification('Review followup terminée', `MR !${j.mrNumber} - ${j.projectPath}`, logger);
+    } else if (!result.cancelled) {
+      sendNotification('Review followup échouée', `MR !${j.mrNumber} - Code ${result.exitCode}`, logger);
+      throw new Error(`Post-fix followup review failed with exit code ${result.exitCode}`);
+    }
+  });
+
+  logger.info({ mrNumber: job.mrNumber }, 'Post-fix followup job enqueued');
 }
 
 export async function handleGitLabWebhook(
