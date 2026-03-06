@@ -1,4 +1,4 @@
-import type { ReviewContextAction, ReviewContextResult } from './reviewContextAction.schema.js'
+import type { ReviewContextAction, ReviewContextResult, Finding } from './reviewContextAction.schema.js'
 
 export interface DiffMetadata {
   baseSha: string
@@ -46,6 +46,8 @@ export interface ReviewContext {
   result?: ReviewContextResult
   agentInstructions?: AgentInstructions
   diffMetadata?: DiffMetadata
+  previousFindings?: Finding[]
+  previousReport?: string
 }
 
 export interface CreateReviewContextInput {
@@ -57,6 +59,8 @@ export interface CreateReviewContextInput {
   threads?: ReviewContextThread[]
   agents?: ReviewContextAgent[]
   diffMetadata?: DiffMetadata
+  previousFindings?: Finding[]
+  previousReport?: string
 }
 
 export interface CreateReviewContextResult {

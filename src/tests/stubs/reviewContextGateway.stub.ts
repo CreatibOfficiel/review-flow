@@ -30,6 +30,8 @@ export class StubReviewContextGateway implements ReviewContextGateway {
       projectPath: input.projectPath,
       mergeRequestNumber: input.mergeRequestNumber,
       threads: input.threads ?? [],
+      ...(input.previousFindings ? { previousFindings: input.previousFindings } : {}),
+      ...(input.previousReport ? { previousReport: input.previousReport } : {}),
     })
     this.contexts.set(input.mergeRequestId, context)
     return {
