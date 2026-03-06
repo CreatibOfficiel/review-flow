@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { writeFileSync, mkdirSync, existsSync, unlinkSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Logger } from 'pino';
@@ -55,38 +55,6 @@ export function writeMcpContext(job: ReviewJob): void {
     writeFileSync(filePath, JSON.stringify(context, null, 2));
   } catch {
     // Non-critical, MCP will work without context
-  }
-}
-
-export function ensureProjectMcpConfig(projectPath: string): void {
-  try {
-    const mcpServerPath = resolveMcpServerPath();
-    const mcpConfigPath = join(projectPath, '.mcp.json');
-    const expectedConfig = {
-      mcpServers: {
-        "review-progress": {
-          command: "node",
-          args: [mcpServerPath],
-        },
-      },
-    };
-
-    // Check if file exists and has correct config
-    if (existsSync(mcpConfigPath)) {
-      const existing = JSON.parse(readFileSync(mcpConfigPath, 'utf-8'));
-      if (existing?.mcpServers?.["review-progress"]) {
-        return; // Already configured
-      }
-      // Merge with existing config
-      existing.mcpServers = existing.mcpServers || {};
-      existing.mcpServers["review-progress"] = expectedConfig.mcpServers["review-progress"];
-      writeFileSync(mcpConfigPath, JSON.stringify(existing, null, 2) + '\n');
-    } else {
-      // Create new config
-      writeFileSync(mcpConfigPath, JSON.stringify(expectedConfig, null, 2) + '\n');
-    }
-  } catch {
-    // Non-critical, skill may still work without MCP
   }
 }
 
