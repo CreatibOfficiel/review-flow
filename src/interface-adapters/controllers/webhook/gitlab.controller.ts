@@ -127,6 +127,13 @@ function maybeEnqueueFixJob(
           'Failed to fetch diff metadata for fix, inline comments will be skipped'
         );
       }
+      const previousContext = contextGateway.read(j.localPath, mergeRequestId);
+      const previousFindings = previousContext?.result?.findings;
+      const previousReport = previousContext?.actions
+        .filter(a => a.type === 'POST_COMMENT')
+        .map(a => 'body' in a ? a.body : '')
+        .filter(Boolean)
+        .join('\n\n---\n\n') || undefined;
       const fixAgentsList = getFixAgents(j.localPath) ?? DEFAULT_FIX_AGENTS;
       contextGateway.create({
         localPath: j.localPath,
@@ -137,6 +144,8 @@ function maybeEnqueueFixJob(
         threads,
         agents: fixAgentsList,
         diffMetadata,
+        previousFindings,
+        previousReport,
       });
       logger.info(
         { mrNumber: j.mrNumber, threadsCount: threads.length, hasDiffMetadata: !!diffMetadata },
