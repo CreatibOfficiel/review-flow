@@ -2,6 +2,7 @@ import type { McpToolResult } from "../../../mcp/types.js";
 import {
 	setResult,
 	type SetResultDependencies,
+	type SetResultInput,
 } from "../../../usecases/mcp/setResult.usecase.js";
 
 const VALID_VERDICTS = ["ready_to_merge", "needs_fixes", "needs_discussion"] as const;
@@ -16,6 +17,7 @@ export function createSetResultHandler(
 		const suggestions = args.suggestions;
 		const score = args.score;
 		const verdict = args.verdict;
+		const findings = Array.isArray(args.findings) ? args.findings as SetResultInput["findings"] : undefined;
 
 		if (typeof jobId !== "string" || !jobId) {
 			return {
@@ -44,6 +46,7 @@ export function createSetResultHandler(
 			suggestions,
 			score,
 			verdict: verdict as typeof VALID_VERDICTS[number],
+			findings,
 		}, deps);
 
 		if (!result.success) {

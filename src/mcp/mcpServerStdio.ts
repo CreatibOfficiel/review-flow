@@ -197,6 +197,20 @@ const TOOL_DEFINITIONS = [
 					enum: ["ready_to_merge", "needs_fixes", "needs_discussion"],
 					description: "Review verdict",
 				},
+				findings: {
+					type: "array",
+					description: "Structured list of findings with optional file/line references",
+					items: {
+						type: "object",
+						properties: {
+							severity: { type: "string", enum: ["blocking", "warning", "suggestion"] },
+							description: { type: "string" },
+							file: { type: "string", description: "File path relative to repo root" },
+							line: { type: "number", description: "Line number in the file" },
+						},
+						required: ["severity", "description"],
+					},
+				},
 			},
 			required: ["jobId", "blocking", "warnings", "suggestions", "score", "verdict"],
 		},
