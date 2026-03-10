@@ -125,6 +125,11 @@ export function filterGitLabMrUpdate(event: GitLabMergeRequestEvent): FilterResu
     return { shouldProcess: false, reason: `Action is ${mr.action}, not update` };
   }
 
+  // Skip if this is just a reviewer change (not new commits)
+  if (event.changes?.reviewers) {
+    return { shouldProcess: false, reason: 'Update is a reviewer change, not new commits' };
+  }
+
   return {
     shouldProcess: true,
     reason: 'MR was updated (potential new commits)',
